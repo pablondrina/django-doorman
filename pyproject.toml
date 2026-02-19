@@ -1,0 +1,104 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "django-doorman"
+version = "0.1.0"
+description = "Phone-first authentication for Django"
+readme = "README.md"
+license = "MIT"
+authors = [
+    {name = "Pablo Valentini", email = "pablondrina@gmail.com"}
+]
+maintainers = [
+    {name = "Pablo Valentini", email = "pablondrina@gmail.com"}
+]
+keywords = [
+    "django",
+    "authentication",
+    "phone",
+    "otp",
+    "magic-code",
+    "bridge-token",
+    "passwordless",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Web Environment",
+    "Framework :: Django",
+    "Framework :: Django :: 5.0",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+requires-python = ">=3.11"
+dependencies = [
+    "Django>=5.0,<6.0",
+]
+
+[project.optional-dependencies]
+unfold = [
+    "django-unfold>=0.49,<1.0",
+]
+admin = [
+    "django-unfold>=0.49,<1.0",
+]
+whatsapp = [
+    "httpx>=0.25",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-django>=4.5",
+    "pytest-cov>=4.0",
+    "ruff>=0.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/pablondrina/django-doorman"
+Repository = "https://github.com/pablondrina/django-doorman"
+Changelog = "https://github.com/pablondrina/django-doorman/blob/main/CHANGELOG.md"
+Issues = "https://github.com/pablondrina/django-doorman/issues"
+
+[tool.setuptools]
+packages = [
+    "doorman",
+    "doorman.models",
+    "doorman.views",
+    "doorman.services",
+    "doorman.migrations",
+    "doorman.tests",
+]
+include-package-data = true
+
+[tool.setuptools.package-dir]
+doorman = "."
+
+[tool.setuptools.package-data]
+doorman = [
+    "py.typed",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+select = ["E", "W", "F", "I", "B", "C4", "UP"]
+ignore = ["E501", "B008"]
+exclude = ["migrations"]
+
+[tool.ruff.isort]
+known-first-party = ["doorman"]
+known-third-party = ["django"]
+
+[tool.pytest.ini_options]
+python_files = ["test_*.py", "*_test.py"]
+addopts = ["--strict-markers", "-ra"]
+
+[tool.coverage.run]
+source = ["doorman"]
+omit = ["*/migrations/*", "*/tests/*"]
