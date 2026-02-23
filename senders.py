@@ -121,24 +121,35 @@ class SMSSender:
 class EmailSender:
     """
     Email sender using Django's email backend.
+
+    Uses Django templates for email body (D1) and gettext for subject.
+    Uses Django's DEFAULT_FROM_EMAIL setting for the sender address.
     """
 
-    def __init__(self):
+    def send_code(self, target: str, code: str, method: str) -> bool:
+        from django.core.mail import EmailMultiAlternatives
+        from django.template.loader import render_to_string
+        from django.utils.translation import gettext as _
+
         from .conf import doorman_settings
 
-        self.from_email = getattr(doorman_settings, "EMAIL_FROM", None)
-
-    def send_code(self, target: str, code: str, method: str) -> bool:
-        from django.core.mail import send_mail
+        ttl = doorman_settings.MAGIC_CODE_TTL_MINUTES
+        context = {"code": code, "ttl_minutes": ttl}
 
         try:
-            send_mail(
-                subject="Seu codigo de verificacao",
-                message=f"Seu codigo de verificacao e: {code}\n\nEste codigo expira em 10 minutos.",
-                from_email=self.from_email,
-                recipient_list=[target],
-                fail_silently=False,
+            subject = _("Your verification code")
+            text_body = render_to_string("doorman/email_code.txt", context)
+            html_body = render_to_string("doorman/email_code.html", context)
+
+            msg = EmailMultiAlternatives(
+                subject=subject,
+                body=text_body,
+                from_email=None,  # Uses DEFAULT_FROM_EMAIL
+                to=[target],
             )
+            msg.attach_alternative(html_body, "text/html")
+            msg.send(fail_silently=False)
+
             logger.info(f"Email code sent to {target}")
             return True
         except Exception as e:

@@ -36,6 +36,14 @@ class IdentityLink(models.Model):
 
     created_at = models.DateTimeField(_("criado em"), auto_now_add=True)
 
+    # D3: Metadata for device info, login source, etc.
+    metadata = models.JSONField(
+        _("metadados"),
+        default=dict,
+        blank=True,
+        help_text=_("Device info, origem do primeiro login, etc."),
+    )
+
     class Meta:
         db_table = "doorman_identity_link"
         verbose_name = _("perfil de usuário")
@@ -45,7 +53,8 @@ class IdentityLink(models.Model):
         return f"User {self.user_id} <-> Customer {self.customer_id}"
 
     def get_customer(self):
-        """Fetch Customer from Guestman."""
-        from guestman.models import Customer
+        """Fetch customer info via resolver."""
+        from ..conf import get_customer_resolver
 
-        return Customer.objects.get(uuid=self.customer_id)
+        resolver = get_customer_resolver()
+        return resolver.get_by_uuid(self.customer_id)

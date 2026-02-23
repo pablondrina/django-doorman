@@ -1,38 +1,50 @@
 """
-Doorman Django Admin configuration.
+Doorman Admin with Unfold theme.
+
+This module provides Unfold-styled admin classes for Doorman models.
+To use, add 'doorman.contrib.admin_unfold' to INSTALLED_APPS after 'doorman'.
+
+The admins will automatically unregister the basic admins and register
+the Unfold versions.
 """
 
 from django.contrib import admin
-from django.utils.html import format_html
+from unfold.decorators import display
 
-from .models import BridgeToken, IdentityLink, MagicCode, TrustedDevice
+from shopman_commons.contrib.admin_unfold.badges import unfold_badge
+from shopman_commons.contrib.admin_unfold.base import BaseModelAdmin
+
+from doorman.models import BridgeToken, IdentityLink, MagicCode, TrustedDevice
 
 
-# ===========================================
-# IdentityLink
-# ===========================================
+# Unregister basic admins
+for model in [IdentityLink, BridgeToken, MagicCode, TrustedDevice]:
+    try:
+        admin.site.unregister(model)
+    except admin.sites.NotRegistered:
+        pass
+
+
+# =============================================================================
+# IDENTITY LINK ADMIN
+# =============================================================================
 
 
 @admin.register(IdentityLink)
-class IdentityLinkAdmin(admin.ModelAdmin):
-    list_display = ["id", "user_link", "customer_id_short", "created_at"]
+class IdentityLinkAdmin(BaseModelAdmin):
+    list_display = ["id", "user", "customer_id_short", "created_at"]
     search_fields = ["user__username", "customer_id"]
     readonly_fields = ["user", "customer_id", "created_at", "metadata"]
     ordering = ["-created_at"]
 
-    def user_link(self, obj):
-        return format_html(
-            '<a href="/admin/auth/user/{}/change/">{}</a>',
-            obj.user_id,
-            obj.user,
-        )
+    fieldsets = [
+        (None, {"fields": ["user", "customer_id"]}),
+        ("Metadata", {"fields": ["metadata", "created_at"], "classes": ["collapse"]}),
+    ]
 
-    user_link.short_description = "User"
-
+    @display(description="Customer ID")
     def customer_id_short(self, obj):
-        return str(obj.customer_id)[:8] + "..."
-
-    customer_id_short.short_description = "Customer ID"
+        return str(obj.customer_id)[:8] + "…"
 
     def has_add_permission(self, request):
         return False
@@ -41,18 +53,18 @@ class IdentityLinkAdmin(admin.ModelAdmin):
         return False
 
 
-# ===========================================
-# BridgeToken
-# ===========================================
+# =============================================================================
+# BRIDGE TOKEN ADMIN
+# =============================================================================
 
 
 @admin.register(BridgeToken)
-class BridgeTokenAdmin(admin.ModelAdmin):
+class BridgeTokenAdmin(BaseModelAdmin):
     list_display = [
         "token_short",
         "customer_id_short",
-        "audience",
-        "source",
+        "audience_badge",
+        "source_badge",
         "status_badge",
         "created_at",
     ]
@@ -81,25 +93,43 @@ class BridgeTokenAdmin(admin.ModelAdmin):
         ("Metadata", {"fields": ["metadata"], "classes": ["collapse"]}),
     ]
 
+    @display(description="Token")
     def token_short(self, obj):
-        return obj.token[:12] + "..."
+        return obj.token[:12] + "…"
 
-    token_short.short_description = "Token"
-
+    @display(description="Customer")
     def customer_id_short(self, obj):
-        return str(obj.customer_id)[:8] + "..."
+        return str(obj.customer_id)[:8] + "…"
 
-    customer_id_short.short_description = "Customer"
+    @display(description="Audience")
+    def audience_badge(self, obj):
+        colors = {
+            "web_checkout": "green",
+            "web_account": "blue",
+            "web_support": "yellow",
+            "web_general": "base",
+        }
+        color = colors.get(obj.audience, "base")
+        return unfold_badge(obj.get_audience_display(), color)
 
+    @display(description="Source")
+    def source_badge(self, obj):
+        colors = {
+            "manychat": "blue",
+            "internal": "base",
+            "api": "green",
+        }
+        color = colors.get(obj.source, "base")
+        return unfold_badge(obj.get_source_display(), color)
+
+    @display(description="Status")
     def status_badge(self, obj):
         if obj.used_at:
-            return format_html('<span style="color: blue;">Used</span>')
+            return unfold_badge("Used", "blue")
         elif obj.is_expired:
-            return format_html('<span style="color: gray;">Expired</span>')
+            return unfold_badge("Expired", "base")
         else:
-            return format_html('<span style="color: green;">Valid</span>')
-
-    status_badge.short_description = "Status"
+            return unfold_badge("Valid", "green")
 
     def has_add_permission(self, request):
         return False
@@ -108,18 +138,18 @@ class BridgeTokenAdmin(admin.ModelAdmin):
         return False
 
 
-# ===========================================
-# MagicCode
-# ===========================================
+# =============================================================================
+# MAGIC CODE ADMIN
+# =============================================================================
 
 
 @admin.register(MagicCode)
-class MagicCodeAdmin(admin.ModelAdmin):
+class MagicCodeAdmin(BaseModelAdmin):
     list_display = [
         "code_hash_short",
         "target_masked",
-        "purpose",
-        "delivery_method",
+        "purpose_badge",
+        "delivery_badge",
         "status_badge",
         "attempts_display",
         "created_at",
@@ -153,6 +183,11 @@ class MagicCodeAdmin(admin.ModelAdmin):
         ("Result", {"fields": ["customer_id"]}),
     ]
 
+    @display(description="Code Hash")
+    def code_hash_short(self, obj):
+        return obj.code_hash[:12] + "…"
+
+    @display(description="Target")
     def target_masked(self, obj):
         value = obj.target_value
         if "@" in value:
@@ -165,40 +200,36 @@ class MagicCodeAdmin(admin.ModelAdmin):
             return "***" + value[-4:]
         return "****"
 
-    target_masked.short_description = "Target"
+    @display(description="Purpose")
+    def purpose_badge(self, obj):
+        colors = {"login": "blue", "verify_contact": "green"}
+        color = colors.get(obj.purpose, "base")
+        return unfold_badge(obj.get_purpose_display(), color)
 
+    @display(description="Method")
+    def delivery_badge(self, obj):
+        colors = {"whatsapp": "green", "sms": "blue", "email": "yellow"}
+        color = colors.get(obj.delivery_method, "base")
+        return unfold_badge(obj.get_delivery_method_display(), color)
+
+    @display(description="Status")
     def status_badge(self, obj):
         colors = {
-            "pending": "orange",
+            "pending": "yellow",
             "sent": "blue",
             "verified": "green",
-            "expired": "gray",
+            "expired": "base",
             "failed": "red",
         }
-        color = colors.get(obj.status, "gray")
-        return format_html(
-            '<span style="color: {};">{}</span>',
-            color,
-            obj.get_status_display(),
-        )
+        color = colors.get(obj.status, "base")
+        return unfold_badge(obj.get_status_display(), color)
 
-    status_badge.short_description = "Status"
-
+    @display(description="Attempts")
     def attempts_display(self, obj):
+        text = f"{obj.attempts}/{obj.max_attempts}"
         if obj.attempts >= obj.max_attempts:
-            return format_html(
-                '<span style="color: red;">{}/{}</span>',
-                obj.attempts,
-                obj.max_attempts,
-            )
-        return f"{obj.attempts}/{obj.max_attempts}"
-
-    attempts_display.short_description = "Attempts"
-
-    def code_hash_short(self, obj):
-        return obj.code_hash[:12] + "..."
-
-    code_hash_short.short_description = "Code Hash"
+            return unfold_badge(text, "red")
+        return text
 
     def has_add_permission(self, request):
         return False
@@ -207,13 +238,13 @@ class MagicCodeAdmin(admin.ModelAdmin):
         return False
 
 
-# ===========================================
-# TrustedDevice
-# ===========================================
+# =============================================================================
+# TRUSTED DEVICE ADMIN
+# =============================================================================
 
 
 @admin.register(TrustedDevice)
-class TrustedDeviceAdmin(admin.ModelAdmin):
+class TrustedDeviceAdmin(BaseModelAdmin):
     list_display = [
         "token_hash_short",
         "customer_id_short",
@@ -247,25 +278,22 @@ class TrustedDeviceAdmin(admin.ModelAdmin):
 
     actions = ["revoke_selected"]
 
+    @display(description="Token Hash")
     def token_hash_short(self, obj):
-        return obj.token_hash[:12] + "..."
+        return obj.token_hash[:12] + "…"
 
-    token_hash_short.short_description = "Token Hash"
-
+    @display(description="Customer")
     def customer_id_short(self, obj):
-        return str(obj.customer_id)[:8] + "..."
+        return str(obj.customer_id)[:8] + "…"
 
-    customer_id_short.short_description = "Customer"
-
+    @display(description="Status")
     def status_badge(self, obj):
         if not obj.is_active:
-            return format_html('<span style="color: red;">Revoked</span>')
+            return unfold_badge("Revoked", "red")
         elif obj.is_expired:
-            return format_html('<span style="color: gray;">Expired</span>')
+            return unfold_badge("Expired", "base")
         else:
-            return format_html('<span style="color: green;">Active</span>')
-
-    status_badge.short_description = "Status"
+            return unfold_badge("Active", "green")
 
     @admin.action(description="Revoke selected devices")
     def revoke_selected(self, request, queryset):

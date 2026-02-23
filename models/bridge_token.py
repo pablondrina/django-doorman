@@ -42,15 +42,15 @@ class BridgeToken(models.Model):
     """
 
     class Audience(models.TextChoices):
-        WEB_CHECKOUT = "web_checkout", "Checkout"
+        WEB_CHECKOUT = "web_checkout", _("Checkout")
         WEB_ACCOUNT = "web_account", _("Conta")
         WEB_SUPPORT = "web_support", _("Suporte")
         WEB_GENERAL = "web_general", _("Geral")
 
     class Source(models.TextChoices):
-        MANYCHAT = "manychat", "ManyChat"
+        MANYCHAT = "manychat", _("ManyChat")
         INTERNAL = "internal", _("Interno")
-        API = "api", "API"
+        API = "api", _("API")
 
     # Identification
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -133,7 +133,8 @@ class BridgeToken(models.Model):
         self.save(update_fields=["used_at", "user"])
 
     def get_customer(self):
-        """Fetch Customer from Guestman."""
-        from guestman.models import Customer
+        """Fetch customer info via resolver."""
+        from ..conf import get_customer_resolver
 
-        return Customer.objects.get(uuid=self.customer_id)
+        resolver = get_customer_resolver()
+        return resolver.get_by_uuid(self.customer_id)

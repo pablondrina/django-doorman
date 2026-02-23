@@ -50,8 +50,8 @@ class TestMagicCode:
             target_value="+5541999999999",
             purpose=MagicCode.Purpose.LOGIN,
         )
-        assert code.code is not None
-        assert len(code.code) == 6
+        assert code.code_hash is not None
+        assert len(code.code_hash) == 64  # HMAC-SHA256 hex digest
         assert code.is_valid
         assert code.attempts_remaining == 5
 

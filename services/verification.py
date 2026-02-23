@@ -5,21 +5,19 @@ VerificationService - OTP code verification.
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from django.db import transaction
 from django.utils import timezone
 
-from guestman.models import Customer
-from guestman.services import customer as customer_service
-
-from ..conf import doorman_settings
+from ..conf import doorman_settings, get_customer_resolver, get_doorman_settings
+from ..protocols.customer import DoormanCustomerInfo
 from ..exceptions import GateError
 from ..gates import Gates
 from ..models import MagicCode
 from ..signals import magic_code_sent, magic_code_verified
+from ..utils import normalize_phone
 
 if TYPE_CHECKING:
     from django.http import HttpRequest
@@ -27,49 +25,6 @@ if TYPE_CHECKING:
     from ..senders import MessageSenderProtocol
 
 logger = logging.getLogger("doorman.verification")
-
-
-def normalize_phone(value: str) -> str:
-    """
-    Normalize phone number to E.164 format.
-
-    Brazilian phone numbers:
-    - 11 digits: DDD (2) + mobile (9 digits) -> +55 + 11 digits
-    - 10 digits: DDD (2) + landline (8 digits) -> +55 + 10 digits
-    """
-    if not value:
-        return value
-
-    value = value.strip()
-
-    # Email: lowercase
-    if "@" in value:
-        return value.lower()
-
-    # Phone: remove all non-digits first
-    digits_only = re.sub(r"[^\d]", "", value)
-
-    # Handle Brazilian numbers
-    if len(digits_only) == 11:
-        return f"+55{digits_only}"
-    elif len(digits_only) == 10:
-        return f"+55{digits_only}"
-    elif len(digits_only) == 13 and digits_only.startswith("55"):
-        return f"+{digits_only}"
-    elif len(digits_only) == 12 and digits_only.startswith("55"):
-        return f"+{digits_only}"
-    elif value.startswith("+") and len(digits_only) == 11:
-        return f"+55{digits_only}"
-    elif len(digits_only) >= 12 and digits_only.startswith("55"):
-        return f"+{digits_only}"
-
-    # Fallback
-    if digits_only:
-        if len(digits_only) in (10, 11):
-            return f"+55{digits_only}"
-        return f"+{digits_only}"
-
-    return value
 
 
 @dataclass
@@ -87,7 +42,7 @@ class VerifyResult:
     """Result of code verification."""
 
     success: bool
-    customer: Customer | None = None
+    customer: DoormanCustomerInfo | None = None
     created_customer: bool = False
     error: str | None = None
     attempts_remaining: int | None = None
@@ -143,6 +98,18 @@ class VerificationService:
                 error="Too many attempts. Please wait a few minutes.",
             )
 
+        # G11: Cooldown between code sends
+        try:
+            Gates.code_cooldown(
+                target_value=target_value,
+                cooldown_seconds=doorman_settings.MAGIC_CODE_COOLDOWN_SECONDS,
+            )
+        except GateError:
+            return CodeRequestResult(
+                success=False,
+                error="Please wait before requesting a new code.",
+            )
+
         # G10: Rate limit by IP
         if ip_address:
             try:
@@ -160,18 +127,22 @@ class VerificationService:
             status__in=[MagicCode.Status.PENDING, MagicCode.Status.SENT],
         ).update(status=MagicCode.Status.EXPIRED)
 
-        # Create code
+        # Create code — store HMAC, send raw
+        from ..models.magic_code import generate_raw_code
+
+        raw_code, hmac_digest = generate_raw_code()
         code = MagicCode.objects.create(
+            code_hash=hmac_digest,
             target_value=target_value,
             purpose=purpose,
             delivery_method=delivery_method,
             ip_address=ip_address,
         )
 
-        # Send code
+        # Send raw code (not the HMAC)
         sender = sender or cls._get_default_sender()
         try:
-            sent = sender.send_code(target_value, code.code, delivery_method)
+            sent = sender.send_code(target_value, raw_code, delivery_method)
             if sent:
                 code.mark_sent()
             else:
@@ -231,8 +202,10 @@ class VerificationService:
                 error="Code expired. Please request a new one.",
             )
 
-        # Verify code
-        if code.code != code_input.strip():
+        # Verify code via HMAC comparison
+        from ..models.magic_code import verify_code
+
+        if not verify_code(code.code_hash, code_input):
             code.record_attempt()
             return VerifyResult(
                 success=False,
@@ -240,20 +213,20 @@ class VerificationService:
                 attempts_remaining=code.attempts_remaining,
             )
 
-        # Get or create Customer via Guestman
-        # First try to find existing customer by phone
-        customer = customer_service.get_by_phone(target_value)
+        # Get or create Customer via resolver
+        resolver = get_customer_resolver()
+        customer = resolver.get_by_phone(target_value)
         created = False
 
         if not customer:
-            # Create new customer
-            import uuid as uuid_lib
+            # H03: Respect AUTO_CREATE_CUSTOMER setting
+            if not get_doorman_settings().AUTO_CREATE_CUSTOMER:
+                return VerifyResult(
+                    success=False,
+                    error="Account not found. Please contact support.",
+                )
 
-            customer = customer_service.create(
-                code=f"WEB-{str(uuid_lib.uuid4())[:8].upper()}",
-                first_name="",
-                phone=target_value,
-            )
+            customer = resolver.create_for_phone(target_value)
             created = True
 
         # Mark code verified

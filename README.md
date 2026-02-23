@@ -248,6 +248,10 @@ Doorman provides Django Admin views for:
 
 All admin views are read-only for security.
 
+## Shopman Suite
+
+Doorman is part of the [Shopman suite](https://github.com/pablondrina). Shared admin utilities are available via [django-shopman-commons](https://github.com/pablondrina/django-shopman-commons).
+
 ## Requirements
 
 - Python 3.11+

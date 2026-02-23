@@ -4,7 +4,6 @@ Magic code views.
 
 import json
 import logging
-import re
 
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
@@ -15,47 +14,9 @@ from ..conf import get_doorman_settings
 from ..models import BridgeToken, MagicCode
 from ..services.auth_bridge import AuthBridgeService
 from ..services.verification import VerificationService
+from ..utils import get_client_ip, normalize_phone, safe_redirect_url
 
 logger = logging.getLogger("doorman.views.magic_code")
-
-
-def normalize_phone(phone_raw: str) -> str | None:
-    """
-    Normalize phone number to E.164 format.
-
-    Supports Brazilian phones with or without country code.
-    """
-    if not phone_raw:
-        return None
-
-    # Remove all non-digits except +
-    phone = re.sub(r"[^\d+]", "", phone_raw.strip())
-
-    # Handle Brazilian numbers
-    if phone.startswith("+"):
-        # Already has country code
-        if len(phone) >= 12:  # +55 + DDD + number
-            return phone
-    elif phone.startswith("55"):
-        # Has country code without +
-        if len(phone) >= 12:
-            return f"+{phone}"
-    elif len(phone) == 11:
-        # DDD + 9-digit mobile
-        return f"+55{phone}"
-    elif len(phone) == 10:
-        # DDD + 8-digit landline
-        return f"+55{phone}"
-
-    return None
-
-
-def get_client_ip(request) -> str:
-    """Get client IP from request."""
-    xff = request.META.get("HTTP_X_FORWARDED_FOR")
-    if xff:
-        return xff.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR", "")
 
 
 class MagicCodeRequestView(View):
@@ -118,10 +79,11 @@ class MagicCodeRequestView(View):
             )
 
         # Request code
+        settings = get_doorman_settings()
         result = VerificationService.request_code(
             target_value=phone,
             purpose=MagicCode.Purpose.LOGIN,
-            ip_address=get_client_ip(request),
+            ip_address=get_client_ip(request, settings.TRUSTED_PROXY_DEPTH),
         )
 
         if not result.success:
@@ -139,9 +101,12 @@ class MagicCodeRequestView(View):
 
         # Store phone and next URL in session
         request.session["doorman_phone"] = phone
-        next_url = request.POST.get("next") or request.GET.get("next", "")
-        if next_url:
-            request.session["doorman_next"] = next_url
+        raw_next = request.POST.get("next") or request.GET.get("next", "")
+        if raw_next:
+            # Validate before storing to prevent open redirect (H02)
+            validated = safe_redirect_url(raw_next, request)
+            if validated != get_doorman_settings().LOGIN_REDIRECT_URL:
+                request.session["doorman_next"] = validated
 
         return redirect("doorman:code-verify")
 
@@ -252,6 +217,6 @@ class MagicCodeVerifyView(View):
                 }
             )
 
-        # Redirect to next URL or default
-        redirect_url = next_url or settings.LOGIN_REDIRECT_URL
+        # Redirect to next URL or default (H02 - validated)
+        redirect_url = safe_redirect_url(next_url, request)
         return redirect(redirect_url)

@@ -1,37 +1,30 @@
-"""
-Doorman exceptions.
-"""
+"""Doorman exceptions."""
+
+from typing import Any
+
+from commons.exceptions import BaseError
 
 
-class DoormanError(Exception):
-    """Base exception for Doorman."""
+class DoormanError(BaseError):
+    """
+    Base exception for Doorman.
 
-    pass
+    Usage:
+        raise DoormanError("TOKEN_INVALID")
+        raise DoormanError("RATE_LIMIT", retry_after=60)
+    """
 
-
-class TokenInvalidError(DoormanError):
-    """Token is invalid or expired."""
-
-    pass
-
-
-class CodeInvalidError(DoormanError):
-    """Code is invalid or expired."""
-
-    pass
-
-
-class RateLimitError(DoormanError):
-    """Rate limit exceeded."""
-
-    pass
+    _default_messages: dict[str, str] = {
+        "TOKEN_INVALID": "Token is invalid or expired",
+        "CODE_INVALID": "Code is invalid or expired",
+        "RATE_LIMIT": "Rate limit exceeded",
+        "GATE_FAILED": "Gate validation failed",
+    }
 
 
-class GateError(Exception):
+class GateError(DoormanError):
     """Gate validation error."""
 
-    def __init__(self, gate_name: str, message: str, details: dict | None = None):
+    def __init__(self, gate_name: str, message: str = "", **data: Any) -> None:
+        super().__init__("GATE_FAILED", message, gate_name=gate_name, **data)
         self.gate_name = gate_name
-        self.message = message
-        self.details = details or {}
-        super().__init__(f"[{gate_name}] {message}")

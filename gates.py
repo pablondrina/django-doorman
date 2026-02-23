@@ -4,6 +4,7 @@ Doorman Gates - Validation rules.
 G7: BridgeTokenValidity - Token is valid for exchange
 G8: MagicCodeValidity - Code is valid for verification
 G9: RateLimit - Rate limiting for code requests
+G11: CodeCooldown - Minimum time between code sends
 """
 
 from dataclasses import dataclass
@@ -205,3 +206,43 @@ class Gates:
             )
 
         return GateResult(True, "G10_IPRateLimit")
+
+    # ===========================================
+    # G11: Code Send Cooldown
+    # ===========================================
+
+    @classmethod
+    def code_cooldown(
+        cls,
+        target_value: str,
+        cooldown_seconds: int,
+    ) -> GateResult:
+        """
+        G11: Minimum time between code sends to same target.
+
+        Prevents rapid-fire code requests that waste messaging credits
+        and confuse the user (only the last code works).
+
+        Args:
+            target_value: Phone/email
+            cooldown_seconds: Minimum seconds between sends
+
+        Raises:
+            GateError: If cooldown period not elapsed
+        """
+        last_code = (
+            MagicCode.objects.filter(target_value=target_value)
+            .order_by("-created_at")
+            .first()
+        )
+
+        if last_code:
+            elapsed = (timezone.now() - last_code.created_at).total_seconds()
+            if elapsed < cooldown_seconds:
+                remaining = int(cooldown_seconds - elapsed)
+                raise GateError(
+                    "G11_CodeCooldown",
+                    f"Please wait {remaining}s before requesting a new code.",
+                )
+
+        return GateResult(True, "G11_CodeCooldown")

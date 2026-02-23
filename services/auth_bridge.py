@@ -14,9 +14,8 @@ from django.db import transaction
 from django.urls import reverse
 from django.utils import timezone
 
-from guestman.models import Customer
-
-from ..conf import doorman_settings
+from ..conf import doorman_settings, get_customer_resolver
+from ..protocols.customer import DoormanCustomerInfo
 from ..exceptions import GateError
 from ..gates import Gates
 from ..models import BridgeToken, IdentityLink
@@ -46,7 +45,7 @@ class AuthResult:
 
     success: bool
     user: User | None = None
-    customer: Customer | None = None
+    customer: DoormanCustomerInfo | None = None
     created_user: bool = False
     error: str | None = None
 
@@ -66,7 +65,7 @@ class AuthBridgeService:
     @classmethod
     def create_token(
         cls,
-        customer: Customer,
+        customer: DoormanCustomerInfo,
         audience: str = BridgeToken.Audience.WEB_GENERAL,
         source: str = BridgeToken.Source.MANYCHAT,
         ttl_minutes: int | None = None,
@@ -174,10 +173,10 @@ class AuthBridgeService:
         except GateError as e:
             return AuthResult(success=False, error=e.message)
 
-        # Fetch Customer from Guestman
-        try:
-            customer = token.get_customer()
-        except Customer.DoesNotExist:
+        # Fetch customer info via resolver
+        resolver = get_customer_resolver()
+        customer = resolver.get_by_uuid(token.customer_id)
+        if not customer:
             return AuthResult(success=False, error="Customer not found.")
 
         if not customer.is_active:
@@ -195,10 +194,10 @@ class AuthBridgeService:
             for key in preserve_session_keys:
                 if key in request.session:
                     preserved[key] = request.session[key]
-                    logger.info(f"Preserving session key '{key}': {preserved[key]}")
-            logger.info(f"Session keys to preserve: {list(preserved.keys())}")
+            # H04: Log only key names, never values (PII risk)
+            logger.debug("Preserving session keys: %s", list(preserved.keys()))
         else:
-            logger.info("No session keys to preserve (preserve_session_keys is None or empty)")
+            logger.debug("No session keys to preserve")
 
         # Django login
         login(request, user, backend="django.contrib.auth.backends.ModelBackend")
@@ -207,10 +206,10 @@ class AuthBridgeService:
         if preserved:
             for key, value in preserved.items():
                 request.session[key] = value
-                logger.info(f"Restored session key '{key}': {value}")
             request.session.modified = True
+            logger.debug("Restored %d session keys", len(preserved))
         else:
-            logger.info("No session keys were preserved to restore")
+            logger.debug("No session keys to restore")
 
         # Signal
         customer_authenticated.send(
@@ -238,9 +237,11 @@ class AuthBridgeService:
         )
 
     @classmethod
-    def _get_or_create_user(cls, customer: Customer) -> tuple[User, bool]:
+    def _get_or_create_user(cls, customer: DoormanCustomerInfo) -> tuple[User, bool]:
         """
         Get or create User for Customer.
+
+        Handles concurrent creation via IntegrityError retry.
 
         Args:
             customer: Customer from Guestman
@@ -248,6 +249,8 @@ class AuthBridgeService:
         Returns:
             (User, created) tuple
         """
+        from django.db import IntegrityError
+
         # Check existing link
         try:
             link = IdentityLink.objects.select_related("user").get(
@@ -269,8 +272,16 @@ class AuthBridgeService:
                 user.last_name = parts[1]
             user.save(update_fields=["first_name", "last_name"])
 
-        # Create link
-        IdentityLink.objects.create(user=user, customer_id=customer.uuid)
+        # Create link — retry on concurrent creation
+        try:
+            IdentityLink.objects.create(user=user, customer_id=customer.uuid)
+        except IntegrityError:
+            # Another request already created the link; use that one
+            user.delete()
+            link = IdentityLink.objects.select_related("user").get(
+                customer_id=customer.uuid,
+            )
+            return link.user, False
 
         logger.info(
             "User created for customer",
@@ -284,7 +295,7 @@ class AuthBridgeService:
     # ===========================================
 
     @classmethod
-    def get_customer_for_user(cls, user) -> Customer | None:
+    def get_customer_for_user(cls, user) -> DoormanCustomerInfo | None:
         """
         Get Customer for a Django User.
 
@@ -292,18 +303,17 @@ class AuthBridgeService:
             user: Django User instance
 
         Returns:
-            Customer or None
+            DoormanCustomerInfo or None
         """
         try:
             link = IdentityLink.objects.get(user=user)
-            return link.get_customer()
+            resolver = get_customer_resolver()
+            return resolver.get_by_uuid(link.customer_id)
         except IdentityLink.DoesNotExist:
-            return None
-        except Customer.DoesNotExist:
             return None
 
     @classmethod
-    def get_user_for_customer(cls, customer: Customer) -> User | None:
+    def get_user_for_customer(cls, customer: DoormanCustomerInfo) -> User | None:
         """
         Get Django User for a Customer.
 

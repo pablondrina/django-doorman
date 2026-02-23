@@ -2,18 +2,46 @@
 MagicCode model - OTP code for verification.
 """
 
-import random
+import hashlib
+import hmac
+import secrets
 import uuid
 from datetime import timedelta
 
+from django.conf import settings
 from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 
+def _get_hmac_key() -> bytes:
+    """Get the HMAC key for OTP hashing."""
+    from ..conf import doorman_settings
+    key = getattr(doorman_settings, "OTP_HMAC_KEY", "") or settings.SECRET_KEY
+    return key.encode("utf-8")
+
+
 def generate_code() -> str:
-    """Generate a 6-digit code."""
-    return f"{random.randint(0, 999999):06d}"
+    """Generate a 6-digit code and return its HMAC digest."""
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    return _hmac_code(code)
+
+
+def generate_raw_code() -> tuple[str, str]:
+    """Generate a 6-digit code. Returns (raw_code, hmac_digest)."""
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    return code, _hmac_code(code)
+
+
+def _hmac_code(code: str) -> str:
+    """Compute HMAC-SHA256 hex digest for a code."""
+    return hmac.new(_get_hmac_key(), code.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def verify_code(stored_digest: str, code_input: str) -> bool:
+    """Verify a code against its stored HMAC digest."""
+    input_digest = _hmac_code(code_input.strip())
+    return hmac.compare_digest(stored_digest, input_digest)
 
 
 def default_code_expiry():
@@ -21,6 +49,11 @@ def default_code_expiry():
     from ..conf import doorman_settings
 
     return timezone.now() + timedelta(minutes=doorman_settings.MAGIC_CODE_TTL_MINUTES)
+
+
+def _default_max_attempts():
+    from doorman.conf import doorman_settings
+    return doorman_settings.MAGIC_CODE_MAX_ATTEMPTS
 
 
 class MagicCode(models.Model):
@@ -33,9 +66,9 @@ class MagicCode(models.Model):
     """
 
     class DeliveryMethod(models.TextChoices):
-        WHATSAPP = "whatsapp", "WhatsApp"
-        SMS = "sms", "SMS"
-        EMAIL = "email", "Email"
+        WHATSAPP = "whatsapp", _("WhatsApp")
+        SMS = "sms", _("SMS")
+        EMAIL = "email", _("Email")
 
     class Status(models.TextChoices):
         PENDING = "pending", _("Pendente")
@@ -45,12 +78,17 @@ class MagicCode(models.Model):
         FAILED = "failed", _("Falhou")
 
     class Purpose(models.TextChoices):
-        LOGIN = "login", "Login"
+        LOGIN = "login", _("Login")
         VERIFY_CONTACT = "verify_contact", _("Verificar Contato")
 
     # Identification
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    code = models.CharField(_("código"), max_length=6, default=generate_code)
+    code_hash = models.CharField(
+        _("hash do código"),
+        max_length=64,
+        default=generate_code,
+        help_text=_("HMAC-SHA256 do código OTP. Nunca armazena plaintext."),
+    )
 
     # Target
     target_value = models.CharField(
@@ -90,7 +128,7 @@ class MagicCode(models.Model):
 
     # Security
     attempts = models.PositiveSmallIntegerField(_("tentativas"), default=0)
-    max_attempts = models.PositiveSmallIntegerField(_("máximo de tentativas"), default=5)
+    max_attempts = models.PositiveSmallIntegerField(_("máximo de tentativas"), default=_default_max_attempts)
     ip_address = models.GenericIPAddressField(_("endereço IP"), null=True, blank=True)
 
     # Result (Customer UUID from Guestman)
@@ -112,7 +150,7 @@ class MagicCode(models.Model):
         ]
 
     def __str__(self):
-        return f"Code {self.code} for {self.target_value} ({self.status})"
+        return f"Code {self.code_hash[:12]}… for {self.target_value} ({self.status})"
 
     @property
     def is_expired(self) -> bool:
